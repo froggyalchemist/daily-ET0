@@ -27,13 +27,14 @@ GCM_REGISTRY = [
     GCMConfig("NorESM2-LM",     "r1i1p1f1",  "gn"),
     GCMConfig("NorESM2-MM",     "r1i1p1f1",  "gn"),
     GCMConfig("MPI-ESM1-2-HR",  "r1i1p1f1",  "gn"),
-    GCMConfig("MPI-ESM1-2-LR",  "r10i1p1f1", "gn"),
+    GCMConfig("MPI-ESM1-2-LR",  "r1i1p1f1", "gn"),
     GCMConfig("UKESM1-0-LL",    "r1i1p1f2",  "gn"),
 ]
 
-EXPERIMENTS = ["ssp126", "ssp245", "ssp370", "ssp585"]
+EXPERIMENTS = ["historical", "ssp126", "ssp245", "ssp370", "ssp585"]
 VARIABLES   = ["hfls", "hfss", "hurs", "ps", "sfcWind", "tas"]
 
+# Required start and end years all experiments except 'historical'
 REQUIRED_YEAR_START = 2015
 REQUIRED_YEAR_END   = 2100
 
@@ -98,24 +99,38 @@ def check_all_data(
     """
     rows = []
 
+    # Loop through all GCM × experiment × variable combinations
     for gcm in gcm_registry:
         for exp in experiments:
             for var in variables:
                 row = dict(gcm=gcm.name, experiment=exp, variable=var,
                            n_files=None, status=None, coverage=None, error=None)
                 try:
+                    # Try opening the variable's file
                     paths = archive.get_paths_for(gcm.name, exp, var)
                     row["n_files"] = len(paths)
 
+                    # Read years from file name (e.g. xxxx_20152100.nc)
                     year_range = get_year_coverage_from_paths(paths)
                     if year_range is None:
                         row["status"] = "⚠️ Unparseable filenames"
                     else:
                         actual_start, actual_end = year_range
                         row["coverage"] = f"{actual_start}–{actual_end}"
-                        if actual_start > REQUIRED_YEAR_START:
+
+                        # If experiment is historical, coverage must be from 1850 to 2014
+                        if exp == "historical":
+                            required_start = 1850
+                            required_end = 2014
+                        # For other experiments it is from REQUIRED_YEAR_START to REQUIRED_YEAR_END
+                        else:
+                            required_start = REQUIRED_YEAR_START
+                            required_end = REQUIRED_YEAR_END
+
+                        # Check if file covers required date range
+                        if actual_start > required_start:
                             row["status"] = "⚠️ Starts late"
-                        elif actual_end < REQUIRED_YEAR_END:
+                        elif actual_end < required_end:
                             row["status"] = "⚠️ Ends early"
                         else:
                             row["status"] = "✅ Complete"
@@ -140,10 +155,10 @@ if __name__ == "__main__":
     print("Created local archive: ", archive, "\n")
 
     # Small test to see if we can open a dataset
-    test = GCMConfig("MPI-ESM1-2-HR", "r1i1p1f1", "gn")
-    ds = archive.get_variable_dataset(test.name, "ssp126", "ps")
-    print(ds["ps"], "\n")
-    ds.close()
+    #test = GCMConfig("MPI-ESM1-2-HR", "r1i1p1f1", "gn")
+    #ds = archive.get_variable_dataset(test.name, "ssp126", "ps")
+    #print(ds["ps"], "\n")
+    #ds.close()
 
     # Full validation sweep
     with console.status("[bold magenta]Checking local archive contains all GCM × experiment × variable combinations:\n", spinner='clock') as status:
