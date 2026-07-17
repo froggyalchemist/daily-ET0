@@ -61,9 +61,7 @@ class CMIP6LocalArchive:
             raise FileNotFoundError(f"No files for {gcm} / {expid} / {varid}")
         return [Path(m) for m in matches]
 
-    def get_variable_dataset(
-        self, gcm: str, expid: str, varid: str, chunks: dict | None = None
-    ) -> xr.Dataset:
+    def get_variable_dataset(self, gcm: str, expid: str, varid: str, chunks = "auto") -> xr.Dataset:
         """Open a dataset for a GCM / experiment / variable, handling multi-file cases."""
         paths = self.get_paths_for(gcm, expid, varid)
         if len(paths) == 1:
