@@ -1,9 +1,10 @@
-import joblib
 import numpy as np
 import xarray as xr
 import cmip6_archive as ca
+from rich import print
+from rich.console import Console
 from datetime import datetime, timezone
-from dask.distributed import Client, LocalCluster
+from dask.distributed import LocalCluster, progress
 
 def kelvin_to_celsius(da: xr.DataArray) -> xr.DataArray:
     """Convert temperature DataArray from K to °C if needed."""
@@ -129,12 +130,9 @@ def penman_monteith(
 
 OUTPUTS = ["ET0", "ET0_rad", "ET0_adv", "VPD"]
 
-def compute_output(archive: ca.CMIP6LocalArchive, gcm: str, exp: str, output: str) -> str:
-    """Computes one output (ET0, ET0_rad, ET0_adv, or VPD) of a single GCM x experiment combination."""
-
+def process_combination(archive, gcm, exp):
+    
     # Safety check
-    if output not in OUTPUTS:
-        raise ValueError(f"Argument 'output' must be one of {OUTPUTS}")
     if gcm not in [model.name for model in ca.GCM_REGISTRY]:
         raise ValueError(f"GCM '{gcm}' is not in CGM_REGISTRY. Modify cmip6_archive.py if necessary.")
     if exp not in ca.EXPERIMENTS:
@@ -147,39 +145,50 @@ def compute_output(archive: ca.CMIP6LocalArchive, gcm: str, exp: str, output: st
     hfss    = archive.get_variable_dataset(gcm, exp, "hfss")["hfss"]
     sfcWind = archive.get_variable_dataset(gcm, exp, "sfcWind")["sfcWind"]
     hurs    = archive.get_variable_dataset(gcm, exp, "hurs")["hurs"]
-    tas_ds     = archive.get_variable_dataset(gcm, exp, "tas") # Used to copy dataset-level attributes from parent GCM
+    tas_ds  = archive.get_variable_dataset(gcm, exp, "tas")             # Used to copy dataset-level attributes from parent GCM
 
-    ds = penman_monteith(tas, ps, hfls, hfss, sfcWind, hurs, parent_ds_attrs=tas_ds.attrs)
+    # Compute ET0, ET0_rad, ET0_adv, and VPD
+    ds = penman_monteith(tas, ps, hfls, hfss, sfcWind, hurs, parent_ds_attrs=tas_ds.attrs).persist()
 
-    # Dataset containing only one variable (ET0, ET0_rad, ET0_adv, or VPD)
-    # .compute() forces Dask to trigger the computation
-    out = ds[[output]].compute() 
+    # 4 output files in total: ET0, ET0_rad, ET0_adv, and VPD
+    paths = []
+    for output in OUTPUTS:
+        path = f"/work/home/H.mvelasco/SSPs/daily-ET0/test-result/{output}_{gcm}_{exp}.nc"
+        ds[[output]].to_netcdf(path) # Save as xr.Dataset
+        paths.append(path)
 
-    # TODO: add date range at the end of the filename, and make the path configurable
-    path = f"/work/home/H.mvelasco/SSPs/daily-ET0/test-result/{output}_{gcm}_{exp}.nc"
-    out.to_netcdf(path)
-
-    return path
-
+    return paths
 
 if __name__ == "__main__":
 
-    print(ca.GCM_REGISTRY)
-
     # Dask Cluster to parallelize computations using processes
     cluster = LocalCluster()
-    client = Client(cluster)
-    print(client.dashboard_link) # Monitor computation with the Dask dashboard
+    client = cluster.get_client()
+
+    print(f"Started Dask cluster dashboard at {client.dashboard_link}") # Dashboard to monitor computation 
     
     # Create local archive
     archive = ca.CMIP6LocalArchive(root="/work10/archive/CMIP6/CMIP-SSPs/")
 
     # Test with a single GCM x experiment combo
-    gcm, exp = "MIROC6", "ssp126"
+    gcms = ["MIROC6"]
+    exps = ["ssp126", "ssp245"]
 
-    with joblib.parallel_config(backend="dask"):
-        joblib.Parallel(verbose=100)(
-            joblib.delayed(compute_output)(archive, gcm, exp, output) for output in OUTPUTS
-        )
+    # Compute in parallel
+    console = Console()
+    with console.status("[bold magenta] Processing...\n", spinner='aesthetic') as status:
 
-    print("Finished")
+        futures = []
+        for gcm in gcms:
+            for exp in exps:
+                future = client.submit(process_combination, archive, gcm, exp)
+                futures.append(future)
+
+        results = client.gather(futures)
+
+    #TODO: fix tomorrow --> try with 3 experiments, can't see Dask dashboard for some reason
+    #TODO: handle dates (prevent opening unused time data) and set date range at the end of the file
+    #TODO: make output path configurable
+    #TODO: handle variants
+
+    print("🎉 Finished!")
