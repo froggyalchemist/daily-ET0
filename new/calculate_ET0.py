@@ -1,10 +1,14 @@
 import numpy as np
+import pandas as pd
 import xarray as xr
-import cmip6_archive as ca
+import cmip6_archive2 as ca
 from rich import print
 from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCompleteColumn, TimeElapsedColumn
+from rich_tools import df_to_table
+from pathlib import Path
 from datetime import datetime, timezone
-from dask.distributed import LocalCluster, progress
+from dask.distributed import LocalCluster, as_completed
 
 def kelvin_to_celsius(da: xr.DataArray) -> xr.DataArray:
     """Convert temperature DataArray from K to °C if needed."""
@@ -118,8 +122,8 @@ def penman_monteith(
     # Combine the 4 variables in a single Dataset
     ds = xr.Dataset({
             "ET0":     ET0,
-            "ET0_rad": ET0_rad,
-            "ET0_adv": ET0_adv,
+            "ET0rad": ET0_rad,
+            "ET0adv": ET0_adv,
             "VPD":     VPD,
         })
 
@@ -128,9 +132,11 @@ def penman_monteith(
 
     return ds
 
-OUTPUTS = ["ET0", "ET0_rad", "ET0_adv", "VPD"]
+# Default location for output netCDFs (and the run log)
+#DEFAULT_OUTPUT_DIR = "/work/home/H.mvelasco/SSPs/daily-ET0/test-result"
+DEFAULT_OUTPUT_DIR = "/work10/archive/CMIP6/CMIP-SSPs/outputs"
 
-def process_combination(archive, gcm, exp):
+def process_combination(archive, gcm, exp, output_dir: str = DEFAULT_OUTPUT_DIR):
     
     # Safety check
     if gcm not in [model.name for model in ca.GCM_REGISTRY]:
@@ -147,14 +153,21 @@ def process_combination(archive, gcm, exp):
     hurs    = archive.get_variable_dataset(gcm, exp, "hurs")["hurs"]
     tas_ds  = archive.get_variable_dataset(gcm, exp, "tas")             # Used to copy dataset-level attributes from parent GCM
 
-    # Compute ET0, ET0_rad, ET0_adv, and VPD
+    # Compute Dataset with ET0, ET0_rad, ET0_adv, and VPD
     ds = penman_monteith(tas, ps, hfls, hfss, sfcWind, hurs, parent_ds_attrs=tas_ds.attrs).persist()
+
+    # Make sure the output directory exists
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+    # Start and end days as strings (e.g. '20191231')
+    start = ds["time"].dt.strftime("%Y%m%d").values[0]
+    end = ds["time"].dt.strftime("%Y%m%d").values[-1]
 
     # 4 output files in total: ET0, ET0_rad, ET0_adv, and VPD
     paths = []
-    for output in OUTPUTS:
-        path = f"/work/home/H.mvelasco/SSPs/daily-ET0/test-result/{output}_{gcm}_{exp}.nc"
-        ds[[output]].to_netcdf(path) # Save as xr.Dataset
+    for var in ds.data_vars:
+        path = f"{output_dir}/{var}_day_{gcm}_{exp}_{start}-{end}.nc"
+        ds[[var]].to_netcdf(path) # Save as xr.Dataset
         paths.append(path)
 
     return paths
@@ -170,20 +183,66 @@ if __name__ == "__main__":
     # Create local archive
     archive = ca.CMIP6LocalArchive(root="/work10/archive/CMIP6/CMIP-SSPs/")
 
-    # Test with a single GCM x experiment combo
-    gcms = ["MIROC6"]
-    exps = ["ssp126", "ssp245"]
+    # Test with a single GCM  
+    #gcms = ["MIROC6"]
+    #gcms = [model.name for model in ca.GCM_REGISTRY] # Use all GCMs
+    gcms = ["MRI-ESM2-0"]
+    exps = ["ssp126"]
+    combinations = [(gcm, exp) for gcm in gcms for exp in exps]
 
-    # Compute in parallel
+    # Show a progress bar with total combinations completed
+    log_rows = []
     console = Console()
-    with console.status("[bold magenta] Processing...\n", spinner='aesthetic') as status:
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[bold magenta]Processing combinations..."),
+        BarColumn(),
+        MofNCompleteColumn(),          # combinations processed so far
+        TimeElapsedColumn(),           # time passed since the run started
+        console=console,
+    ) as progress_bar:
 
-        futures = []
-        for gcm in gcms:
-            for exp in exps:
-                future = client.submit(process_combination, archive, gcm, exp)
-                futures.append(future)
+        task = progress_bar.add_task("combinations", total=len(combinations))
 
-        results = client.gather(futures)
+        # Submit all tasks to Dask scheduler
+        # (Each GCM x experiment combo is one task)
+        futures = {
+            client.submit(process_combination, archive, gcm, exp): (gcm, exp)
+            for gcm, exp in combinations
+        }
+
+        # When one task is complete, add log entry and advance progress bar
+        for future in as_completed(futures):
+            gcm, exp = futures[future]
+            try:
+                paths = future.result()
+                log_rows.append({
+                    "gcm": gcm,
+                    "experiment": exp,
+                    "status": "✅ success",
+                    "error": None,
+                    "output_files": ", ".join(paths),
+                })
+            except Exception as e:
+                log_rows.append({
+                    "gcm": gcm,
+                    "experiment": exp,
+                    "status": "☠️ failed",
+                    "error": f"{type(e).__name__}: {e}",
+                    "output_files": None,
+                })
+            progress_bar.advance(task)
 
     print("🎉 Finished!")
+
+    # Write the run log to a csv, detailing which combinations succeeded and why the rest failed
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    log_path = Path(DEFAULT_OUTPUT_DIR) / 'logs' / f"calculate_ET0_log_{timestamp}.csv"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_df = pd.DataFrame(log_rows)
+    log_df.to_csv(log_path, index=False)
+
+    # Display the run log as a rich table
+    table = df_to_table(log_df, show_index=False)
+    console.print(table)
+    console.print(f"\nRun log written to {log_path}")
