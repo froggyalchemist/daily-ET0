@@ -9,9 +9,9 @@
 
 **22-07-2026**
 
-- [ ] check out trial run errors
-- [ ] replace files in daily-ET0 with those in daily-ET0/new
-- [ ] commit and push to GitHub 
+- [x] check out trial run errors
+- [x] replace files in daily-ET0 with those in daily-ET0/new
+- [x] commit and push to GitHub 
 - [x] remove attribute ET0:standard_name = "air_temperature" 
 - [ ] inform hsin. ask which attributes are needed, and show some plots and ask him whether results make sense or not and how i can check everything is correct
 

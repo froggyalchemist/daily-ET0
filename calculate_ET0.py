@@ -1,10 +1,14 @@
 import numpy as np
+import pandas as pd
 import xarray as xr
-import cmip6_archive as ca
+import cmip6_archive2 as ca
 from rich import print
 from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCompleteColumn, TimeElapsedColumn
+from rich_tools import df_to_table
+from pathlib import Path
 from datetime import datetime, timezone
-from dask.distributed import LocalCluster, progress
+from dask.distributed import LocalCluster, as_completed
 
 def kelvin_to_celsius(da: xr.DataArray) -> xr.DataArray:
     """Convert temperature DataArray from K to °C if needed."""
@@ -48,7 +52,7 @@ def psychrometric_constant(ps: xr.DataArray) -> xr.DataArray:
 def wind_speed_2m(sfcWind: xr.DataArray, height: float = 10.0) -> xr.DataArray:
     """Rescale wind from measurement height to 2 m using FAO-56 log profile."""
     if sfcWind.attrs.get("units") != "m s-1":
-        raise ValueError(f"Temperature must be in m s-1 but it is in {sfcWind.attrs.get("units")}")
+        raise ValueError(f"Wind speed must be in m s-1 but it is in {sfcWind.attrs.get("units")}")
     return sfcWind  * 4.87 / np.log(67.8 * height - 5.42)
 
 def assign_ds_attrs(parent_ds_attrs: dict) -> dict:
@@ -64,7 +68,7 @@ def assign_ds_attrs(parent_ds_attrs: dict) -> dict:
             )
     attrs = {
         "creation_date":    timestamp,
-        "history":          f"{timestamp}: Created from data at National Taiwan University using ET0-test.ipynb",
+        "history":          f"{timestamp}: Created from data at National Taiwan University using calculate_ET0.py",
         "authors":          "Marina Velasco-Barriuso (UPF)",
         "source_id":        parent_ds_attrs["source_id"],
         "variant_label":    parent_ds_attrs["variant_label"],
@@ -103,23 +107,27 @@ def penman_monteith(
 
     # Calculate radiative and advective components separately
     denominator   = delta + gamma * (1 + 0.34 * U2)            # Common to both terms
-    ET0_rad = (0.408 * delta * Rn) / denominator              # Assumes G ≈ 0
-    ET0_adv = (gamma * 900 * U2 * VPD / (tas_c + 273)) / denominator
+    ET0rad = (0.408 * delta * Rn) / denominator              # Assumes G ≈ 0
+    ET0adv = (gamma * 900 * U2 * VPD / (tas_c + 273)) / denominator
 
     # Calculate potential evapotranspiration as the sum of both terms
-    ET0     = ET0_rad + ET0_adv
+    ET0     = ET0rad + ET0adv
 
     # Assign variable-level attributes
-    ET0 = ET0.assign_attrs(units="mm day-1", long_name="FAO-56 Penman-Monteith reference evapotranspiration")
-    ET0_rad = ET0_rad.assign_attrs(units="mm day-1", long_name="Radiative component of ET0")
-    ET0_adv = ET0_adv.assign_attrs(units="mm day-1", long_name="Advective component of ET0")
-    VPD = VPD.assign_attrs(units="kPa",     long_name="Vapor pressure deficit")
-
+    ET0.attrs = {"units": "mm day-1",
+                 "long_name": "FAO-56 Penman-Monteith reference evapotranspiration"}
+    ET0rad.attrs = {"units": "mm day-1",
+                     "long_name": "Radiative component of ET0"}
+    ET0adv.attrs = {"units": "mm day-1",
+                     "long_name": "Advective component of ET0"}
+    VPD.attrs = {"units": "kPa",
+                 "long_name": "Vapor pressure deficit"}
+    
     # Combine the 4 variables in a single Dataset
     ds = xr.Dataset({
             "ET0":     ET0,
-            "ET0_rad": ET0_rad,
-            "ET0_adv": ET0_adv,
+            "ET0rad": ET0rad,
+            "ET0adv": ET0adv,
             "VPD":     VPD,
         })
 
@@ -128,9 +136,11 @@ def penman_monteith(
 
     return ds
 
-OUTPUTS = ["ET0", "ET0_rad", "ET0_adv", "VPD"]
+# Default location for output netCDFs (and the run log)
+#DEFAULT_OUTPUT_DIR = "/work/home/H.mvelasco/SSPs/daily-ET0/test-result"
+DEFAULT_OUTPUT_DIR = "/work10/archive/CMIP6/CMIP-SSPs/outputs"
 
-def process_combination(archive, gcm, exp):
+def process_combination(archive, gcm, exp, output_dir: str = DEFAULT_OUTPUT_DIR):
     
     # Safety check
     if gcm not in [model.name for model in ca.GCM_REGISTRY]:
@@ -139,27 +149,36 @@ def process_combination(archive, gcm, exp):
         raise ValueError(f"Experiment '{exp}' is not in EXPERIMENTS. Modify cmip6_archive.py if necessary.")
     
     # Read in data as Xarray DataArrays
-    tas     = archive.get_variable_dataset(gcm, exp, "tas")["tas"]
+    tas_ds  = archive.get_variable_dataset(gcm, exp, "tas")             # Used to copy dataset-level attributes from parent GCM
+    tas     = tas_ds["tas"]
     ps      = archive.get_variable_dataset(gcm, exp, "ps")["ps"]
     hfls    = archive.get_variable_dataset(gcm, exp, "hfls")["hfls"]
     hfss    = archive.get_variable_dataset(gcm, exp, "hfss")["hfss"]
     sfcWind = archive.get_variable_dataset(gcm, exp, "sfcWind")["sfcWind"]
     hurs    = archive.get_variable_dataset(gcm, exp, "hurs")["hurs"]
-    tas_ds  = archive.get_variable_dataset(gcm, exp, "tas")             # Used to copy dataset-level attributes from parent GCM
 
-    # Compute ET0, ET0_rad, ET0_adv, and VPD
+    # Compute Dataset with ET0, ET0_rad, ET0_adv, and VPD
     ds = penman_monteith(tas, ps, hfls, hfss, sfcWind, hurs, parent_ds_attrs=tas_ds.attrs).persist()
+
+    # Make sure the output directory exists
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+    # Start and end days as strings (e.g. '20191231')
+    start = ds["time"].dt.strftime("%Y%m%d").values[0]
+    end = ds["time"].dt.strftime("%Y%m%d").values[-1]
 
     # 4 output files in total: ET0, ET0_rad, ET0_adv, and VPD
     paths = []
-    for output in OUTPUTS:
-        path = f"/work/home/H.mvelasco/SSPs/daily-ET0/test-result/{output}_{gcm}_{exp}.nc"
-        ds[[output]].to_netcdf(path) # Save as xr.Dataset
+    for var in ds.data_vars:
+        path = f"{output_dir}/{var}_day_{gcm}_{exp}_{start}-{end}.nc"
+        ds[[var]].to_netcdf(path) # Save as xr.Dataset
         paths.append(path)
 
     return paths
 
 if __name__ == "__main__":
+    # This is jut to avoid getting warnings fom xarray
+    xr.set_options(use_new_combine_kwarg_defaults=True)
 
     # Dask Cluster to parallelize computations using processes
     cluster = LocalCluster()
@@ -170,20 +189,67 @@ if __name__ == "__main__":
     # Create local archive
     archive = ca.CMIP6LocalArchive(root="/work10/archive/CMIP6/CMIP-SSPs/")
 
-    # Test with a single GCM x experiment combo
-    gcms = ["MIROC6"]
-    exps = ["ssp126", "ssp245"]
+    # All models, historical simulation
+    gcms = [model.name for model in ca.GCM_REGISTRY] # Use all GCMs
+    exps = ["historical"]
+    combinations = [(gcm, exp) for gcm in gcms for exp in exps]
 
-    # Compute in parallel
+    # Show a progress bar with total combinations completed
+    log_rows = []
     console = Console()
-    with console.status("[bold magenta] Processing...\n", spinner='aesthetic') as status:
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[bold magenta]Processing combinations..."),
+        BarColumn(),
+        MofNCompleteColumn(),          # combinations processed so far
+        TimeElapsedColumn(),           # time passed since the run started
+        console=console,
+    ) as progress_bar:
 
-        futures = []
-        for gcm in gcms:
-            for exp in exps:
-                future = client.submit(process_combination, archive, gcm, exp)
-                futures.append(future)
+        task = progress_bar.add_task("combinations", total=len(combinations))
 
-        results = client.gather(futures)
+        # Submit all tasks to Dask scheduler
+        # (Each GCM x experiment combo is one task)
+        futures = {
+            client.submit(process_combination, archive, gcm, exp): (gcm, exp)
+            for gcm, exp in combinations
+        }
+
+        # When one task is complete, add log entry and advance progress bar
+        for future in as_completed(futures):
+            gcm, exp = futures[future]
+            try:
+                paths = future.result()
+                log_rows.append({
+                    "gcm": gcm,
+                    "experiment": exp,
+                    "status": "✅ success",
+                    "error": None,
+                    "output_files": ", ".join(paths),
+                })
+            except Exception as e:
+                log_rows.append({
+                    "gcm": gcm,
+                    "experiment": exp,
+                    "status": "☠️ failed",
+                    "error": f"{type(e).__name__}: {e}",
+                    "output_files": None,
+                })
+            progress_bar.advance(task)
+
+    # Close the client
+    client.close()
 
     print("🎉 Finished!")
+
+    # Write the run log to a csv, detailing which combinations succeeded and why the rest failed
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    log_path = Path(DEFAULT_OUTPUT_DIR) / 'logs' / f"calculate_ET0_log_{timestamp}.csv"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_df = pd.DataFrame(log_rows)
+    log_df.to_csv(log_path, index=False)
+
+    # Display the run log as a rich table
+    table = df_to_table(log_df, show_index=False)
+    console.print(table)
+    console.print(f"\nRun log written to {log_path}")

@@ -38,8 +38,55 @@ VARIABLES   = ["hfls", "hfss", "hurs", "ps", "sfcWind", "tas"]
 REQUIRED_YEAR_START = 2015
 REQUIRED_YEAR_END   = 2100
 
+# Required start and end years for the 'historical' experiment
+HISTORICAL_YEAR_START = 1850
+HISTORICAL_YEAR_END   = 2014
+
 # Matches the date range at the end of a CMIP6 filename, e.g. 20150101-20991231
 _DATE_RANGE_RE = re.compile(r"(\d{4})\d{4}-(\d{4})\d{4}\.nc$")
+
+
+def get_gcm_config(name: str, registry: list[GCMConfig] = GCM_REGISTRY) -> GCMConfig:
+    """Look up a GCMConfig by name in a registry, raising if it isn't found."""
+    for config in registry:
+        if config.name == name:
+            return config
+    raise ValueError(f"GCM '{name}' is not in the registry.")
+
+
+def required_year_range(expid: str) -> tuple[int, int]:
+    """Return the (start_year, end_year) of data actually needed for an experiment:
+    REQUIRED_YEAR_START-REQUIRED_YEAR_END for ssps, HISTORICAL_YEAR_START-HISTORICAL_YEAR_END
+    for historical."""
+    if expid == "historical":
+        return HISTORICAL_YEAR_START, HISTORICAL_YEAR_END
+    return REQUIRED_YEAR_START, REQUIRED_YEAR_END
+
+
+def _file_year_range(path: Path) -> tuple[int, int] | None:
+    """Parse (start_year, end_year) from a single CMIP6 filename, or None if unparseable."""
+    m = _DATE_RANGE_RE.search(path.name)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    return None
+
+
+def _filter_paths_by_year_range(paths: list[Path], start: int, end: int) -> list[Path]:
+    """Keep only the files whose date range overlaps [start, end], so we avoid opening
+    (and dragging around in the task graph) years of data we don't actually need."""
+    filtered = []
+    for p in paths:
+        year_range = _file_year_range(p)
+        if year_range is None:
+            # Can't tell from the filename -- keep it, better safe than sorry
+            filtered.append(p)
+            continue
+        file_start, file_end = year_range
+        if file_end >= start and file_start <= end:
+            filtered.append(p)
+    # Fall back to the full file list if filtering happened to remove everything
+    return filtered if filtered else paths
+
 
 class CMIP6LocalArchive:
     """Represents a local CMIP6 archive nested as <root>/<gcm>/<expid>/<varid>/."""
@@ -50,23 +97,45 @@ class CMIP6LocalArchive:
     def __repr__(self) -> str:
         return f"CMIP6LocalArchive(root='{self.root}')"
 
-    def get_paths_for(self, gcm: str, expid: str, varid: str) -> list[Path]:
-        """Return sorted list of NetCDF paths for a GCM / experiment / variable."""
+    def get_paths_for(self, gcm: str, expid: str, varid: str,
+                       registry: list[GCMConfig] = GCM_REGISTRY) -> list[Path]:
+        """Return sorted list of NetCDF paths for a GCM / experiment / variable.
+
+        Only files matching the variant_id registered for this GCM in `registry` are
+        returned, so we never accidentally pick up a different ensemble member.
+        """
+        variant_id = get_gcm_config(gcm, registry).variant_id
         pattern = (
             self.root / "**" / gcm / expid / "**" / varid
-            / "**" / f"{varid}_*_{gcm}_{expid}*.nc"
+            / "**" / f"{varid}_*_{gcm}_{expid}_{variant_id}*.nc"
         )
         matches = sorted(glob.glob(str(pattern), recursive=True)) # sort chronologically
         if not matches:
-            raise FileNotFoundError(f"No files for {gcm} / {expid} / {varid}")
+            raise FileNotFoundError(f"No files for {gcm} / {expid} / {varid} (variant {variant_id})")
         return [Path(m) for m in matches]
 
-    def get_variable_dataset(self, gcm: str, expid: str, varid: str, chunks = "auto") -> xr.Dataset:
-        """Open a dataset for a GCM / experiment / variable, handling multi-file cases."""
-        paths = self.get_paths_for(gcm, expid, varid)
+    def get_variable_dataset(self, gcm: str, expid: str, varid: str, chunks = "auto",
+                              registry: list[GCMConfig] = GCM_REGISTRY) -> xr.Dataset:
+        """Open a dataset for a GCM / experiment / variable, handling multi-file cases.
+
+        Only opens the files needed to cover the required date range for `expid` and
+        then trims the resulting dataset to exactly that range, so unused time steps
+        are never opened or carried through the computation (see required_year_range).
+        """
+        paths = self.get_paths_for(gcm, expid, varid, registry=registry)
+
+        start_year, end_year = required_year_range(expid)
+        paths = _filter_paths_by_year_range(paths, start_year, end_year)
+
         if len(paths) == 1:
-            return xr.open_dataset(paths[0], chunks=chunks, data_vars='all')
-        return xr.open_mfdataset(paths, combine="by_coords", chunks=chunks, data_vars='all')
+            ds = xr.open_dataset(paths[0], chunks=chunks, data_vars='all')
+        else:
+            ds = xr.open_mfdataset(paths, combine="by_coords", chunks=chunks, data_vars='all', parallel='true')
+
+        # Set the date range at the end of the file: trim to exactly what's required
+        ds = ds.sel(time=slice(f"{start_year}-01-01", f"{end_year}-12-31"))
+
+        return ds
 
 
 def get_year_coverage_from_paths(paths: list[Path]) -> tuple[int, int] | None:
@@ -76,10 +145,12 @@ def get_year_coverage_from_paths(paths: list[Path]) -> tuple[int, int] | None:
     """
     start_years, end_years = [], []
     for p in paths:
-        m = _DATE_RANGE_RE.search(p.name)
-        if m:
-            start_years.append(int(m.group(1)))
-            end_years.append(int(m.group(2)))
+        (start, end) = _file_year_range(p)
+        if (start, end) is None:
+            return None
+        else:
+            start_years.append(start)
+            end_years.append(end)
     if not start_years:
         return None
     return min(start_years), max(end_years)
@@ -105,7 +176,7 @@ def check_all_data(
                            n_files=None, status=None, coverage=None, error=None)
                 try:
                     # Try opening the variable's file
-                    paths = archive.get_paths_for(gcm.name, exp, var)
+                    paths = archive.get_paths_for(gcm.name, exp, var, registry=gcm_registry)
                     row["n_files"] = len(paths)
 
                     # Read years from file name (e.g. xxxx_20152100.nc)
@@ -116,14 +187,9 @@ def check_all_data(
                         actual_start, actual_end = year_range
                         row["coverage"] = f"{actual_start}–{actual_end}"
 
-                        # If experiment is historical, coverage must be from 1850 to 2014
-                        if exp == "historical":
-                            required_start = 1850
-                            required_end = 2014
-                        # For other experiments it is from REQUIRED_YEAR_START to REQUIRED_YEAR_END
-                        else:
-                            required_start = REQUIRED_YEAR_START
-                            required_end = REQUIRED_YEAR_END
+                        # If experiment is historical, coverage must be 
+                        # from 1850 to 2014, else it's 2015 to 2100
+                        required_start, required_end = required_year_range(exp)
 
                         # Check if file covers required date range
                         if actual_start > required_start:
@@ -151,12 +217,10 @@ if __name__ == "__main__":
     # 'archive' lets us open datasets without having to type the full path
     archive = CMIP6LocalArchive(root="/work10/archive/CMIP6/CMIP-SSPs/")
     print("Created local archive: ", archive, "\n")
-
-    
-    #test = GCMConfig("MPI-ESM1-2-HR", "r1i1p1f1", "gn")
-    #ds = archive.get_variable_dataset(test.name, "ssp126", "ps")
-    #print(ds["ps"], "\n")
-    #ds.close()
+    # Small test to see if we can open a dataset
+    test = archive.get_variable_dataset(gcm='MIROC6', expid='ssp126', varid="tas")
+    print(test)
+    test.close()
 
     # Full validation sweep
     with console.status("[bold magenta]Checking local archive contains all GCM × experiment × variable combinations:\n", spinner='clock') as status:
