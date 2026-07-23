@@ -52,7 +52,7 @@ def psychrometric_constant(ps: xr.DataArray) -> xr.DataArray:
 def wind_speed_2m(sfcWind: xr.DataArray, height: float = 10.0) -> xr.DataArray:
     """Rescale wind from measurement height to 2 m using FAO-56 log profile."""
     if sfcWind.attrs.get("units") != "m s-1":
-        raise ValueError(f"Temperature must be in m s-1 but it is in {sfcWind.attrs.get("units")}")
+        raise ValueError(f"Wind speed must be in m s-1 but it is in {sfcWind.attrs.get("units")}")
     return sfcWind  * 4.87 / np.log(67.8 * height - 5.42)
 
 def assign_ds_attrs(parent_ds_attrs: dict) -> dict:
@@ -68,7 +68,7 @@ def assign_ds_attrs(parent_ds_attrs: dict) -> dict:
             )
     attrs = {
         "creation_date":    timestamp,
-        "history":          f"{timestamp}: Created from data at National Taiwan University using ET0-test.ipynb",
+        "history":          f"{timestamp}: Created from data at National Taiwan University using calculate_ET0.py",
         "authors":          "Marina Velasco-Barriuso (UPF)",
         "source_id":        parent_ds_attrs["source_id"],
         "variant_label":    parent_ds_attrs["variant_label"],
@@ -107,23 +107,27 @@ def penman_monteith(
 
     # Calculate radiative and advective components separately
     denominator   = delta + gamma * (1 + 0.34 * U2)            # Common to both terms
-    ET0_rad = (0.408 * delta * Rn) / denominator              # Assumes G ≈ 0
-    ET0_adv = (gamma * 900 * U2 * VPD / (tas_c + 273)) / denominator
+    ET0rad = (0.408 * delta * Rn) / denominator              # Assumes G ≈ 0
+    ET0adv = (gamma * 900 * U2 * VPD / (tas_c + 273)) / denominator
 
     # Calculate potential evapotranspiration as the sum of both terms
-    ET0     = ET0_rad + ET0_adv
+    ET0     = ET0rad + ET0adv
 
     # Assign variable-level attributes
-    ET0 = ET0.assign_attrs(units="mm day-1", long_name="FAO-56 Penman-Monteith reference evapotranspiration")
-    ET0_rad = ET0_rad.assign_attrs(units="mm day-1", long_name="Radiative component of ET0")
-    ET0_adv = ET0_adv.assign_attrs(units="mm day-1", long_name="Advective component of ET0")
-    VPD = VPD.assign_attrs(units="kPa",     long_name="Vapor pressure deficit")
-
+    ET0.attrs = {"units": "mm day-1",
+                 "long_name": "FAO-56 Penman-Monteith reference evapotranspiration"}
+    ET0rad.attrs = {"units": "mm day-1",
+                     "long_name": "Radiative component of ET0"}
+    ET0adv.attrs = {"units": "mm day-1",
+                     "long_name": "Advective component of ET0"}
+    VPD.attrs = {"units": "kPa",
+                 "long_name": "Vapor pressure deficit"}
+    
     # Combine the 4 variables in a single Dataset
     ds = xr.Dataset({
             "ET0":     ET0,
-            "ET0rad": ET0_rad,
-            "ET0adv": ET0_adv,
+            "ET0rad": ET0rad,
+            "ET0adv": ET0adv,
             "VPD":     VPD,
         })
 
@@ -145,13 +149,13 @@ def process_combination(archive, gcm, exp, output_dir: str = DEFAULT_OUTPUT_DIR)
         raise ValueError(f"Experiment '{exp}' is not in EXPERIMENTS. Modify cmip6_archive.py if necessary.")
     
     # Read in data as Xarray DataArrays
-    tas     = archive.get_variable_dataset(gcm, exp, "tas")["tas"]
+    tas_ds  = archive.get_variable_dataset(gcm, exp, "tas")             # Used to copy dataset-level attributes from parent GCM
+    tas     = tas_ds["tas"]
     ps      = archive.get_variable_dataset(gcm, exp, "ps")["ps"]
     hfls    = archive.get_variable_dataset(gcm, exp, "hfls")["hfls"]
     hfss    = archive.get_variable_dataset(gcm, exp, "hfss")["hfss"]
     sfcWind = archive.get_variable_dataset(gcm, exp, "sfcWind")["sfcWind"]
     hurs    = archive.get_variable_dataset(gcm, exp, "hurs")["hurs"]
-    tas_ds  = archive.get_variable_dataset(gcm, exp, "tas")             # Used to copy dataset-level attributes from parent GCM
 
     # Compute Dataset with ET0, ET0_rad, ET0_adv, and VPD
     ds = penman_monteith(tas, ps, hfls, hfss, sfcWind, hurs, parent_ds_attrs=tas_ds.attrs).persist()
@@ -173,6 +177,8 @@ def process_combination(archive, gcm, exp, output_dir: str = DEFAULT_OUTPUT_DIR)
     return paths
 
 if __name__ == "__main__":
+    # This is jut to avoid getting warnings fom xarray
+    xr.set_options(use_new_combine_kwarg_defaults=True)
 
     # Dask Cluster to parallelize computations using processes
     cluster = LocalCluster()
@@ -183,11 +189,9 @@ if __name__ == "__main__":
     # Create local archive
     archive = ca.CMIP6LocalArchive(root="/work10/archive/CMIP6/CMIP-SSPs/")
 
-    # Test with a single GCM  
-    #gcms = ["MIROC6"]
-    #gcms = [model.name for model in ca.GCM_REGISTRY] # Use all GCMs
-    gcms = ["MRI-ESM2-0"]
-    exps = ["ssp126"]
+    # All models, historical simulation
+    gcms = [model.name for model in ca.GCM_REGISTRY] # Use all GCMs
+    exps = ["historical"]
     combinations = [(gcm, exp) for gcm in gcms for exp in exps]
 
     # Show a progress bar with total combinations completed
@@ -232,6 +236,9 @@ if __name__ == "__main__":
                     "output_files": None,
                 })
             progress_bar.advance(task)
+
+    # Close the client
+    client.close()
 
     print("🎉 Finished!")
 

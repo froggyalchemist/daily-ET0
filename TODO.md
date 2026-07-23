@@ -12,5 +12,11 @@
 - [ ] check out trial run errors
 - [ ] replace files in daily-ET0 with those in daily-ET0/new
 - [ ] commit and push to GitHub 
-- [ ] remove attribute ET0:standard_name = "air_temperature" 
+- [x] remove attribute ET0:standard_name = "air_temperature" 
 - [ ] inform hsin. ask which attributes are needed, and show some plots and ask him whether results make sense or not and how i can check everything is correct
+
+
+**For reproducbility**
+- write `environment.yml` file
+- check out sign of Rnet (hflss+hfss)
+- 
