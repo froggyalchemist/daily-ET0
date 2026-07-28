@@ -1,0 +1,17 @@
+name: work
+channels:
+  - defaults
+dependencies:
+  - ipykernel
+  - intake-esgf
+  - ipywidgets
+  - esgf-pyclient
+  - more-itertools
+  - openpyxl
+  - intake-esm
+  - aiohttp
+  - requests
+  - matplotlib
+  - tabulate
+  - joblib
+prefix: /work/home/H.mvelasco/miniconda3/envs/work
