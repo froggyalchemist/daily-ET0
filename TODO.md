@@ -15,8 +15,11 @@
 - [x] remove attribute ET0:standard_name = "air_temperature" 
 - [ ] inform hsin. ask which attributes are needed, and show some plots and ask him whether results make sense or not and how i can check everything is correct
 
+**24-07-2026**
+- [ ] Check out results of test
 
 **For reproducbility**
-- write `environment.yml` file
-- check out sign of Rnet (hflss+hfss)
-- 
+- [ ] reproduce FAO56 example 18
+- [ ] write `environment.yml` file
+- [ ] check out sign of Rnet (hflss+hfss)
+- [ ]

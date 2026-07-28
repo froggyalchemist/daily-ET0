@@ -128,12 +128,12 @@ class CMIP6LocalArchive:
         paths = _filter_paths_by_year_range(paths, start_year, end_year)
 
         if len(paths) == 1:
-            ds = xr.open_dataset(paths[0], chunks=chunks, data_vars='all')
+            ds = xr.open_dataset(paths[0], chunks=chunks)
         else:
-            ds = xr.open_mfdataset(paths, combine="by_coords", chunks=chunks, data_vars='all', parallel='true')
+            ds = xr.open_mfdataset(paths, combine="by_coords", chunks=chunks, data_vars='all', parallel=True)
 
         # Set the date range at the end of the file: trim to exactly what's required
-        ds = ds.sel(time=slice(f"{start_year}-01-01", f"{end_year}-12-31"))
+        ds = ds.sel(time=slice(str(start_year), str(end_year)))
 
         return ds
 

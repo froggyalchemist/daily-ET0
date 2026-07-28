@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 import xarray as xr
-import cmip6_archive2 as ca
+import cmip6_archive as ca
 from rich import print
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCompleteColumn, TimeElapsedColumn
@@ -140,7 +140,7 @@ def penman_monteith(
 #DEFAULT_OUTPUT_DIR = "/work/home/H.mvelasco/SSPs/daily-ET0/test-result"
 DEFAULT_OUTPUT_DIR = "/work10/archive/CMIP6/CMIP-SSPs/outputs"
 
-def process_combination(archive, gcm, exp, output_dir: str = DEFAULT_OUTPUT_DIR):
+def process_combination(archive, gcm, exp, chunks, output_dir: str = DEFAULT_OUTPUT_DIR):
     
     # Safety check
     if gcm not in [model.name for model in ca.GCM_REGISTRY]:
@@ -149,13 +149,13 @@ def process_combination(archive, gcm, exp, output_dir: str = DEFAULT_OUTPUT_DIR)
         raise ValueError(f"Experiment '{exp}' is not in EXPERIMENTS. Modify cmip6_archive.py if necessary.")
     
     # Read in data as Xarray DataArrays
-    tas_ds  = archive.get_variable_dataset(gcm, exp, "tas")             # Used to copy dataset-level attributes from parent GCM
+    tas_ds  = archive.get_variable_dataset(gcm, exp, "tas", chunks=chunks)             # Used to copy dataset-level attributes from parent GCM
     tas     = tas_ds["tas"]
-    ps      = archive.get_variable_dataset(gcm, exp, "ps")["ps"]
-    hfls    = archive.get_variable_dataset(gcm, exp, "hfls")["hfls"]
-    hfss    = archive.get_variable_dataset(gcm, exp, "hfss")["hfss"]
-    sfcWind = archive.get_variable_dataset(gcm, exp, "sfcWind")["sfcWind"]
-    hurs    = archive.get_variable_dataset(gcm, exp, "hurs")["hurs"]
+    ps      = archive.get_variable_dataset(gcm, exp, "ps", chunks=chunks)["ps"]
+    hfls    = archive.get_variable_dataset(gcm, exp, "hfls", chunks=chunks)["hfls"]
+    hfss    = archive.get_variable_dataset(gcm, exp, "hfss", chunks=chunks)["hfss"]
+    sfcWind = archive.get_variable_dataset(gcm, exp, "sfcWind", chunks=chunks)["sfcWind"]
+    hurs    = archive.get_variable_dataset(gcm, exp, "hurs", chunks=chunks)["hurs"]
 
     # Compute Dataset with ET0, ET0_rad, ET0_adv, and VPD
     ds = penman_monteith(tas, ps, hfls, hfss, sfcWind, hurs, parent_ds_attrs=tas_ds.attrs).persist()
@@ -177,8 +177,6 @@ def process_combination(archive, gcm, exp, output_dir: str = DEFAULT_OUTPUT_DIR)
     return paths
 
 if __name__ == "__main__":
-    # This is jut to avoid getting warnings fom xarray
-    xr.set_options(use_new_combine_kwarg_defaults=True)
 
     # Dask Cluster to parallelize computations using processes
     cluster = LocalCluster()
@@ -190,7 +188,8 @@ if __name__ == "__main__":
     archive = ca.CMIP6LocalArchive(root="/work10/archive/CMIP6/CMIP-SSPs/")
 
     # All models, historical simulation
-    gcms = [model.name for model in ca.GCM_REGISTRY] # Use all GCMs
+    gcms = ["IPSL-CM6A-LR"]
+    #gcms = [model.name for model in ca.GCM_REGISTRY] # Use all GCMs
     exps = ["historical"]
     combinations = [(gcm, exp) for gcm in gcms for exp in exps]
 
@@ -208,25 +207,17 @@ if __name__ == "__main__":
 
         task = progress_bar.add_task("combinations", total=len(combinations))
 
-        # Submit all tasks to Dask scheduler
-        # (Each GCM x experiment combo is one task)
-        futures = {
-            client.submit(process_combination, archive, gcm, exp): (gcm, exp)
-            for gcm, exp in combinations
-        }
-
-        # When one task is complete, add log entry and advance progress bar
-        for future in as_completed(futures):
-            gcm, exp = futures[future]
+        # Compute GCM x experiment combinations sequentially
+        for (gcm, exp) in combinations:
             try:
-                paths = future.result()
+                paths = process_combination(archive, gcm, exp, chunks = {'time': 5*365})
                 log_rows.append({
                     "gcm": gcm,
                     "experiment": exp,
                     "status": "✅ success",
                     "error": None,
                     "output_files": ", ".join(paths),
-                })
+                }) 
             except Exception as e:
                 log_rows.append({
                     "gcm": gcm,
