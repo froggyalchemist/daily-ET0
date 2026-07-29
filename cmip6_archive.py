@@ -217,6 +217,7 @@ if __name__ == "__main__":
     # 'archive' lets us open datasets without having to type the full path
     archive = CMIP6LocalArchive(root="/work10/archive/CMIP6/CMIP-SSPs/")
     print("Created local archive: ", archive, "\n")
+
     # Small test to see if we can open a dataset
     test = archive.get_variable_dataset(gcm='MIROC6', expid='ssp126', varid="tas")
     print(test)
