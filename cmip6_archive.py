@@ -32,7 +32,7 @@ GCM_REGISTRY = [
 ]
 
 EXPERIMENTS = ["historical", "ssp126", "ssp245", "ssp370", "ssp585"]
-VARIABLES   = ["hfls", "hfss", "hurs", "ps", "sfcWind", "tas"]
+VARIABLES   = ["rsds", "rsus", "rlds", "rlus", "hurs", "ps", "sfcWind", "tas"]
 
 # Required start and end years all experiments except 'historical'
 REQUIRED_YEAR_START = 2015
@@ -219,9 +219,9 @@ if __name__ == "__main__":
     print("Created local archive: ", archive, "\n")
 
     # Small test to see if we can open a dataset
-    test = archive.get_variable_dataset(gcm='MIROC6', expid='ssp126', varid="tas")
-    print(test)
-    test.close()
+    #test = archive.get_variable_dataset(gcm='MIROC6', expid='ssp126', varid="tas")
+    #print(test)
+    #test.close()
 
     # Full validation sweep
     with console.status("[bold magenta]Checking local archive contains all GCM × experiment × variable combinations:\n", spinner='clock') as status:
