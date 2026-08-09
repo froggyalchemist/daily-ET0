@@ -18,12 +18,13 @@ def kelvin_to_celsius(da: xr.DataArray) -> xr.DataArray:
     else:
         raise AttributeError(f"Temperature must be in Kelvin but units are {da.attrs.get("units")}")
 
-def net_surface_radiation(hfls: xr.DataArray, hfss: xr.DataArray) -> xr.DataArray:
-    """Rn = hfls + hfss (W/m²), converted to MJ/m²/day. """
-    if hfls.attrs.get("units") == "W m-2" and hfss.attrs.get("units") == "W m-2":
-        return (hfls + hfss) * 86400 / 1e6 
+def net_surface_radiation(rsds: xr.DataArray, rsus: xr.DataArray, rlds: xr.DataArray, rlus: xr.DataArray) -> xr.DataArray:
+    """Rn = (rsds - rsus) + (rlds - rlus) (W/m²), converted to MJ/m²/day. """
+    if (rsds.attrs.get("units") == "W m-2" and rsus.attrs.get("units") == "W m-2" and
+        rlds.attrs.get("units") == "W m-2" and rlus.attrs.get("units") == "W m-2"):
+        return ((rsds - rsus) + (rlds - rlus)) * 86400 / 1e6 
     else:
-        raise ValueError(f"Inputs must be in W m-2 but units are {hfls.attrs.get("units")}, {hfss.attrs.get("units")}")
+        raise ValueError(f"Inputs must be in W m-2 but units are {rsds.attrs.get("units")}, {rsus.attrs.get("units")}")
 
 def saturation_vapor_pressure(tas: xr.DataArray) -> xr.DataArray:
     """es in kPa from air temperature in °C. tas must be in °C."""
@@ -58,7 +59,6 @@ def wind_speed_2m(sfcWind: xr.DataArray, height: float = 10.0) -> xr.DataArray:
 def assign_ds_attrs(parent_ds_attrs: dict) -> dict:
     """
     Add dataset-level attributes: history, authors, source_id, variant_label, and experiment_id
-    #TODO decide which attributes from parent dataset to keep
     """
     timestamp = (
                 datetime.now(timezone.utc)
@@ -68,11 +68,17 @@ def assign_ds_attrs(parent_ds_attrs: dict) -> dict:
             )
     attrs = {
         "creation_date":    timestamp,
-        "history":          f"{timestamp}: Created from data at National Taiwan University using calculate_ET0.py",
+        "history":          f"{timestamp}: Created from CMIP6 data at National Taiwan University using calculate_ET0.py",
         "authors":          "Marina Velasco-Barriuso (UPF)",
         "source_id":        parent_ds_attrs["source_id"],
+        "institution":        parent_ds_attrs["institution"],
         "variant_label":    parent_ds_attrs["variant_label"],
         "experiment_id":    parent_ds_attrs["experiment_id"],
+        "frequency":    parent_ds_attrs["frequency"],
+        "grid":    parent_ds_attrs["grid"],
+        "grid_label":    parent_ds_attrs["grid_label"],
+        "nominal_resolution":    parent_ds_attrs["nominal_resolution"],
+        "license":    parent_ds_attrs["license"],
     }
 
     return attrs
@@ -80,8 +86,10 @@ def assign_ds_attrs(parent_ds_attrs: dict) -> dict:
 def penman_monteith(
     tas:      xr.DataArray,
     ps:       xr.DataArray,
-    hfls:     xr.DataArray,
-    hfss:     xr.DataArray,
+    rsds:     xr.DataArray,
+    rsus:     xr.DataArray,
+    rlds:     xr.DataArray,
+    rlus:     xr.DataArray,
     sfcWind:  xr.DataArray,
     hurs:     xr.DataArray,
     parent_ds_attrs: dict,
@@ -95,7 +103,7 @@ def penman_monteith(
 
     # Calculate necessary variables
     # These functions convert units if needed
-    Rn    = net_surface_radiation(hfls, hfss)
+    Rn    = net_surface_radiation(rsds, rsus, rlds, rlus)
     delta = slope_saturation_vapor_pressure_curve(tas_c)
     gamma = psychrometric_constant(ps)
     U2    = wind_speed_2m(sfcWind, height=height)
@@ -152,16 +160,19 @@ def process_combination(archive, gcm, exp, chunks, output_dir: str = DEFAULT_OUT
     tas_ds  = archive.get_variable_dataset(gcm, exp, "tas", chunks=chunks)             # Used to copy dataset-level attributes from parent GCM
     tas     = tas_ds["tas"]
     ps      = archive.get_variable_dataset(gcm, exp, "ps", chunks=chunks)["ps"]
-    hfls    = archive.get_variable_dataset(gcm, exp, "hfls", chunks=chunks)["hfls"]
-    hfss    = archive.get_variable_dataset(gcm, exp, "hfss", chunks=chunks)["hfss"]
+    rsds    = archive.get_variable_dataset(gcm, exp, "rsds", chunks=chunks)["rsds"]
+    rsus    = archive.get_variable_dataset(gcm, exp, "rsus", chunks=chunks)["rsus"]
+    rlds    = archive.get_variable_dataset(gcm, exp, "rlds", chunks=chunks)["rlds"]
+    rlus    = archive.get_variable_dataset(gcm, exp, "rlus", chunks=chunks)["rlus"]
     sfcWind = archive.get_variable_dataset(gcm, exp, "sfcWind", chunks=chunks)["sfcWind"]
     hurs    = archive.get_variable_dataset(gcm, exp, "hurs", chunks=chunks)["hurs"]
 
     # Compute Dataset with ET0, ET0_rad, ET0_adv, and VPD
-    ds = penman_monteith(tas, ps, hfls, hfss, sfcWind, hurs, parent_ds_attrs=tas_ds.attrs).persist()
+    ds = penman_monteith(tas, ps, rsds, rsus, rlds, rlus, sfcWind, hurs, parent_ds_attrs=tas_ds.attrs).persist()
 
-    # Make sure the output directory exists
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    # Save under correct folder (e.g. /work10/archive/CMIP6/CMIP-SSPs/outputs/UKESM1-0-LL/ssp585)
+    out_path = Path(output_dir) / gcm / exp
+    Path(out_path).mkdir(parents=True, exist_ok=True)
 
     # Start and end days as strings (e.g. '20191231')
     start = ds["time"].dt.strftime("%Y%m%d").values[0]
@@ -188,9 +199,9 @@ if __name__ == "__main__":
     archive = ca.CMIP6LocalArchive(root="/work10/archive/CMIP6/CMIP-SSPs/")
 
     # All models, historical simulation
-    gcms = ["IPSL-CM6A-LR"]
+    gcms = ["UKESM1-0-LL"]
     #gcms = [model.name for model in ca.GCM_REGISTRY] # Use all GCMs
-    exps = ["historical"]
+    exps = ["ssp585"]
     combinations = [(gcm, exp) for gcm in gcms for exp in exps]
 
     # Show a progress bar with total combinations completed
