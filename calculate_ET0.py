@@ -8,7 +8,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCo
 from rich_tools import df_to_table
 from pathlib import Path
 from datetime import datetime, timezone
-from dask.distributed import LocalCluster, as_completed
+from dask.distributed import LocalCluster, performance_report
 
 def kelvin_to_celsius(da: xr.DataArray) -> xr.DataArray:
     """Convert temperature DataArray from K to °C if needed."""
@@ -171,26 +171,26 @@ def process_combination(archive, gcm, exp, chunks, output_dir: str = DEFAULT_OUT
     ds = penman_monteith(tas, ps, rsds, rsus, rlds, rlus, sfcWind, hurs, parent_ds_attrs=tas_ds.attrs).persist()
 
     # Save under correct folder (e.g. /work10/archive/CMIP6/CMIP-SSPs/outputs/UKESM1-0-LL/ssp585)
-    out_path = Path(output_dir) / gcm / exp
-    Path(out_path).mkdir(parents=True, exist_ok=True)
+    out_dir = Path(output_dir) / gcm / exp
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
 
     # Start and end days as strings (e.g. '20191231')
     start = ds["time"].dt.strftime("%Y%m%d").values[0]
     end = ds["time"].dt.strftime("%Y%m%d").values[-1]
 
     # 4 output files in total: ET0, ET0_rad, ET0_adv, and VPD
-    paths = []
-    for var in ds.data_vars:
-        path = f"{output_dir}/{var}_day_{gcm}_{exp}_{start}-{end}.nc"
-        ds[[var]].to_netcdf(path) # Save as xr.Dataset
-        paths.append(path)
+    var_names = list(ds.data_vars)
+    paths = [f"{out_dir}/{var}_day_{gcm}_{exp}_{start}-{end}.nc" for var in var_names]
+    datasets = [ds[[var]] for var in var_names]  # each var as its own single-var Dataset
+
+    xr.save_mfdataset(datasets, paths)  # writes all 4 concurrently
 
     return paths
 
 if __name__ == "__main__":
 
     # Dask Cluster to parallelize computations using processes
-    cluster = LocalCluster()
+    cluster = LocalCluster(n_workers=2, threads_per_worker=64, memory_limit="auto")
     client = cluster.get_client()
 
     print(f"Started Dask cluster dashboard at {client.dashboard_link}") # Dashboard to monitor computation 
@@ -221,7 +221,10 @@ if __name__ == "__main__":
         # Compute GCM x experiment combinations sequentially
         for (gcm, exp) in combinations:
             try:
-                paths = process_combination(archive, gcm, exp, chunks = {'time': 5*365})
+
+                with performance_report(filename="./logs/dask-report2.html"):
+                    paths = process_combination(archive, gcm, exp, chunks = {'time': 5*365})
+
                 log_rows.append({
                     "gcm": gcm,
                     "experiment": exp,
