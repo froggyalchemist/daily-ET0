@@ -15,7 +15,7 @@ from rich.progress import (
 from rich_tools import df_to_table
 from pathlib import Path
 from datetime import datetime, timezone
-from dask.distributed import LocalCluster, performance_report
+from dask.distributed import LocalCluster, performance_report, as_completed
 
 
 def kelvin_to_celsius(da: xr.DataArray) -> xr.DataArray:
@@ -179,7 +179,6 @@ def penman_monteith(
 
 
 # Default location for output netCDFs (and the run log)
-# DEFAULT_OUTPUT_DIR = "/work/home/H.mvelasco/SSPs/daily-ET0/test-result"
 DEFAULT_OUTPUT_DIR = "/work10/archive/CMIP6/CMIP-SSPs/outputs"
 
 
@@ -227,7 +226,7 @@ def process_combination(
 
     # 4 output files in total: ET0, ET0_rad, ET0_adv, and VPD
     var_names = list(ds.data_vars)
-    paths = [f"{out_dir}/{var}_day_{gcm}_{exp}_{start}-{end}.nc" for var in var_names]
+    paths = [f"{out_dir}/{gcm}_{exp}_daily_{var}_{start}-{end}.nc" for var in var_names]
     datasets = [
         ds[[var]] for var in var_names
     ]  # each var as its own single-var Dataset
@@ -240,7 +239,8 @@ def process_combination(
 if __name__ == "__main__":
 
     # Dask Cluster to parallelize computations using processes
-    cluster = LocalCluster()
+    # threads_per_worker=1 is deliberate, see https://xcdat.readthedocs.io/en/latest/examples/parallel-computing-with-dask.html#Code-Example---Parallelizing-xCDAT-Computations-with-Dask-(Local-Machine/Login-Node)
+    cluster = LocalCluster(n_workers=16, threads_per_worker=1)
     client = cluster.get_client()
 
     # Dashboard to monitor computation
@@ -249,12 +249,14 @@ if __name__ == "__main__":
     # Create local archive
     archive = ca.CMIP6LocalArchive(root="/work10/archive/CMIP6/CMIP-SSPs/")
 
-    # gcms = [model.name for model in ca.GCM_REGISTRY] # Use all GCMs
-    # exps = ca.EXPERIMENTS
-    # combinations = [(gcm, exp) for gcm in gcms for exp in exps]
-    combinations = [
-        ("MRI-ESM2-0", "ssp245"),
-    ]
+    # List with all 40 combinations of the 8 models and 5 experiments
+    #gcms = [model.name for model in ca.GCM_REGISTRY]
+    #exps = ca.EXPERIMENTS
+    #combinations = [(gcm, exp) for gcm in gcms for exp in exps]
+    combinations = [("MRI-ESM2-0", "ssp585")]
+
+    # Explicit 10-year chunking instead of "auto"
+    chunks = {"time": 365*10, "lat": -1, "lon": -1}
 
     # Show a progress bar with total combinations completed
     log_rows = []
@@ -270,33 +272,43 @@ if __name__ == "__main__":
 
         task = progress_bar.add_task("combinations", total=len(combinations))
 
-        # Compute GCM x experiment combinations sequentially
-        for gcm, exp in combinations:
-            try:
+        # Submit every combination to client. This is non-blocking:
+        # all tasks start immediately and run in the
+        # background across the 16 workers.
+        with performance_report(filename="./logs/dask-report2.html"):
+            futures = {
+                (gcm, exp): client.submit(process_combination, archive, gcm, exp, chunks)
+                for gcm, exp in combinations
+            }
+            # Map back from future -> (gcm, exp) so we know which combination
+            # a given future belongs to once it comes back out of as_completed.
+            future_to_combo = {fut: combo for combo, fut in futures.items()}
 
-                with performance_report(filename="./logs/dask-report2.html"):
-                    paths = process_combination(archive, gcm, exp, chunks="auto")
-
-                log_rows.append(
-                    {
-                        "gcm": gcm,
-                        "experiment": exp,
-                        "status": "✅ success",
-                        "error": None,
-                        "output_files": ", ".join(paths),
-                    }
-                )
-            except Exception as e:
-                log_rows.append(
-                    {
-                        "gcm": gcm,
-                        "experiment": exp,
-                        "status": "☠️ failed",
-                        "error": f"{type(e).__name__}: {e}",
-                        "output_files": None,
-                    }
-                )
-            progress_bar.advance(task)
+            # Once a combo is finished, write whether it succeded or failed to the log
+            for future in as_completed(futures.values()):
+                gcm, exp = future_to_combo[future]
+                try:
+                    paths = future.result()
+                    log_rows.append(
+                        {
+                            "gcm": gcm,
+                            "experiment": exp,
+                            "status": "✅ success",
+                            "error": None,
+                            "output_files": ", ".join(paths),
+                        }
+                    )
+                except Exception as e:
+                    log_rows.append(
+                        {
+                            "gcm": gcm,
+                            "experiment": exp,
+                            "status": "☠️ failed",
+                            "error": f"{type(e).__name__}: {e}",
+                            "output_files": None,
+                        }
+                    )
+                progress_bar.advance(task)
 
     # Close the client
     client.close()

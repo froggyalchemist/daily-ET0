@@ -114,8 +114,7 @@ if __name__ == "__main__":
     output_dir = "/work10/archive/CMIP6/CMIP-SSPs/thirstwave_detection/90th_percentiles"
 
     # Compute the 90th percentile thresholds for every GCM in the registry
-    #models = [config.name for config in ca.GCM_REGISTRY]
-    models = ['UKESM1-0-LL']
+    models = [config.name for config in ca.GCM_REGISTRY]
 
     console = Console()
     log_rows = []
