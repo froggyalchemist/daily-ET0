@@ -14,4 +14,18 @@ dependencies:
   - matplotlib
   - tabulate
   - joblib
+  - cartopy
+  - colormaps
+  - black
+  - xclim
+  - nc-time-axis
+  - nbconvert
+  - flox
+  - snakeviz
+  - xcdat
+  - scienceplots
+  - hvplot[version='>=0.8.1']
+  - panel[version='>=1']
+  - jupyter_bokeh
+  - jupyter
 prefix: /work/home/H.mvelasco/miniconda3/envs/work
