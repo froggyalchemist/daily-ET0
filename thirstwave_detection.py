@@ -60,6 +60,7 @@ def calculate_thirstwave_stats(et0: xr.DataArray, p90: xr.Dataset, valid_event_d
     frequency = event_starts.astype(int).groupby('time.year').sum('time')
     
     # Intensity = mean ETos anomaly above the 90th-percentile threshold during thirstwave days (mm/day)
+    # TODO: change to event-based calculation --> calculate intensity of each event 1st (mean(event_anomalies) / n_event_days), then average along the year
     anomaly = et0.groupby(et0.dayofyear) - p90
     intensity = anomaly.where(valid_event_days).groupby('time.year').mean('time')
     
