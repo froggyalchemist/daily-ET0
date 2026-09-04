@@ -8,24 +8,21 @@ dependencies:
   - esgf-pyclient
   - more-itertools
   - openpyxl
-  - intake-esm
   - aiohttp
   - requests
   - matplotlib
   - tabulate
-  - joblib
   - cartopy
   - colormaps
   - black
-  - xclim
   - nc-time-axis
   - nbconvert
   - flox
-  - snakeviz
-  - xcdat
   - scienceplots
   - hvplot[version='>=0.8.1']
   - panel[version='>=1']
   - jupyter_bokeh
   - jupyter
+  - tree
+  - seaborn
 prefix: /work/home/H.mvelasco/miniconda3/envs/work
