@@ -187,7 +187,7 @@ def process_combination(
 ):
 
     # Safety check
-    if gcm not in [model.name for model in ca.GCM_REGISTRY]:
+    if gcm not in ca.MODELS:
         raise ValueError(
             f"GCM '{gcm}' is not in CGM_REGISTRY. Modify cmip6_archive.py if necessary."
         )
@@ -250,7 +250,7 @@ if __name__ == "__main__":
     archive = ca.CMIP6LocalArchive(root="/work10/archive/CMIP6/CMIP-SSPs/")
 
     # List with all 40 combinations of the 8 models and 5 experiments
-    #gcms = [model.name for model in ca.GCM_REGISTRY]
+    #gcms = ca.MODELS
     #exps = ca.EXPERIMENTS
     #combinations = [(gcm, exp) for gcm in gcms for exp in exps]
     combinations = [("MRI-ESM2-0", "ssp585")]

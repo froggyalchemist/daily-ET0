@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import pandas as pd
 import xarray as xr
+import numpy as np
 
 
 @dataclass(frozen=True) # frozen = can't modify once created
@@ -31,6 +32,7 @@ GCM_REGISTRY = [
     GCMConfig("UKESM1-0-LL",    "r1i1p1f2",  "gn"),
 ]
 
+MODELS = [m.name for m in GCM_REGISTRY]
 EXPERIMENTS = ["historical", "ssp126", "ssp245", "ssp370", "ssp585"]
 VARIABLES   = ["rsds", "rsus", "rlds", "rlus", "hurs", "ps", "sfcWind", "tas"]
 
@@ -136,6 +138,132 @@ class CMIP6LocalArchive:
         ds = ds.sel(time=slice(str(start_year), str(end_year)))
 
         return ds
+
+@dataclass(frozen=True)
+class DerivedArchive:
+    """Represents a single derived-product archive on disk, with one file per
+    model/experiment.
+    
+    **name** (*str*): A short label for the variable stored in the archive, e.g. "ET0". Used in error messages.
+
+    **root** (*Path*): Folder where data files are stored, may contain subfolders or not (see **nested**).
+
+    **filename_glob** (*str*): Template for filenames in this archive. May contain '*' wildcards to absorb details that vary by model (e.g. UKESM1-0-LL's daily files end '...1230' instead of '...1231')
+
+    **nested** (*bool*): Two directory layouts are supported:
+      - nested=True  (default): `<root>/<model>/<exp>/<filename>`
+      - nested=False: `<root>/<filename>`
+    """
+ 
+    name: str
+    root: Path
+    filename_glob: str      # e.g. "{model}_{exp}_daily_ET0_*.nc"
+    nested: bool = True
+ 
+    def _dir(self, model: str, exp: str) -> Path:
+        return (self.root / model / exp) if self.nested else self.root
+ 
+    def path(self, model: str, exp: str) -> Path:
+        """Return the single file path for a model/experiment."""
+        pattern = self.filename_glob.format(model=model, exp=exp)
+        directory = self._dir(model, exp)
+        matches = sorted(directory.glob(pattern))
+        if not matches:
+            raise FileNotFoundError(
+                f"No {self.name} file for {model} / {exp} matching '{pattern}' in {directory}"
+            )
+        if len(matches) > 1:
+            raise ValueError(
+                f"Multiple {self.name} files for {model} / {exp} matched '{pattern}': {matches}"
+            )
+        return matches[0]
+ 
+    def exists(self, model: str, exp: str) -> bool:
+        """True if exactly one file matches, without raising."""
+        try:
+            self.path(model, exp)
+            return True
+        except FileNotFoundError:
+            return False
+ 
+    def open(self, model: str, exp: str, chunks="auto") -> xr.Dataset:
+        """Open the model/experiment's file as an xarray Dataset."""
+        return xr.open_dataset(self.path(model, exp), chunks=chunks)
+ 
+    def load_array(self, model: str, exp: str) -> np.ndarray:
+        """Load the model/experiment's file as a numpy array (for .npy caches)."""
+        return np.load(self.path(model, exp))
+ 
+ 
+# Where daily ET0 data is stored
+ET0_ARCHIVE = DerivedArchive(
+    name="ET0",
+    root=Path("/work10/archive/CMIP6/CMIP-SSPs/outputs"),
+    filename_glob="{model}_{exp}_daily_ET0_*.nc",
+)
+
+# Where daily ET0rad data is stored
+ET0_RAD_ARCHIVE = DerivedArchive(
+    name="ET0rad",
+    root=Path("/work10/archive/CMIP6/CMIP-SSPs/outputs"),
+    filename_glob="{model}_{exp}_daily_ET0rad_*.nc",
+)
+
+# Where daily ET0adv data is stored
+ET0_ADV_ARCHIVE = DerivedArchive(
+    name="ET0adv",
+    root=Path("/work10/archive/CMIP6/CMIP-SSPs/outputs"),
+    filename_glob="{model}_{exp}_daily_ET0adv_*.nc",
+)
+
+# 90th ET0 percentiles archive (only 8 files, one per model)
+PERCENTILES_ARCHIVE = DerivedArchive(
+    name="90th_percentiles",
+    root=Path("/work10/archive/CMIP6/CMIP-SSPs/thirstwave_detection/90th_percentiles"),
+    filename_glob="{model}_historical_90th_percentiles.nc",
+    nested=False
+)
+
+# 90th ET0 percentiles archive (only 8 files, one per model)
+VALID_EVENT_DAYS_ARCHIVE = DerivedArchive(
+    name="valid_event_days",
+    root=Path("/work10/archive/CMIP6/CMIP-SSPs/thirstwave_detection/valid_event_days"),
+    filename_glob="{model}_{exp}_valid_event_days_*.nc",
+    nested=False
+)
+
+# Thirstwave feature files
+THIRSTWAVE_METRICS_GS_ARCHIVE = DerivedArchive(
+    name="thirstwave_metrics_growing_season",
+    root=Path("/work10/archive/CMIP6/CMIP-SSPs/thirstwave_detection/thirstwave_metrics_growing_season"),
+    filename_glob="{model}_{exp}_thirstwave_metrics_growing_season.nc",
+    nested=False
+)
+
+# Files with land area fraction data (sftlf), only one file per model as it is fixed across experiments
+LAND_MASKS_ARCHIVE = DerivedArchive(
+    name="land_area_fraction",
+    root=Path("/work10/archive/CMIP6/CMIP-SSPs/thirstwave_detection/land_area_fraction"),
+    filename_glob="sftlf_fx_{model}_{exp}_*.nc",
+    nested=False
+)
+
+# Thirstwave feature files
+# THIRSTWAVE_ARCHIVE = DerivedArchive(
+#     name="thirstwave features",
+#     root=Path("/work10/archive/CMIP6/CMIP-SSPs/thirstwave_detection/thirstwave_features"),
+#     filename_glob="{model}_{exp}_thirstwave_features_*.nc",
+# )
+ 
+# Cached 30-year (2071-2100) ET0 climatologies -- see calculate_ET0_climatology.py.
+# Flat directory (not nested by model/exp), and .npy rather than .nc, hence
+# nested=False and load_array() instead of open().
+# ET0_CLIMATOLOGY_ARCHIVE = DerivedArchive(
+#     name="ET0 climatology",
+#     root=Path("/work10/archive/CMIP6/CMIP-SSPs/code/daily-ET0/calculations/temporal_means"),
+#     filename_glob="{model}_{exp}_ET0_clim_2071-2100.npy",
+#     nested=False,
+# )
 
 
 def get_year_coverage_from_paths(paths: list[Path]) -> tuple[int, int] | None:
