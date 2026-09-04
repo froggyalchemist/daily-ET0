@@ -3,3 +3,5 @@ logs
 *.nc
 *.npy
 .ipynb_checkpoints
+TODO.md
+toy_tw_data.ipynb
