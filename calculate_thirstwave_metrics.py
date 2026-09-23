@@ -5,6 +5,9 @@ import cmip6_archive as ca
 from glob import glob
 from pathlib import Path
 
+# TODO: document all of these functions
+
+
 # Helper functions
 def get_growing_month_mask(lat, lon, month):
     """

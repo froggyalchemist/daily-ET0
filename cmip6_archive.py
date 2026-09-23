@@ -36,7 +36,7 @@ MODELS = [m.name for m in GCM_REGISTRY]
 EXPERIMENTS = ["historical", "ssp126", "ssp245", "ssp370", "ssp585"]
 VARIABLES   = ["rsds", "rsus", "rlds", "rlus", "hurs", "ps", "sfcWind", "tas"]
 
-# Required start and end years all experiments except 'historical'
+# Required start and end years of all experiments except 'historical'
 REQUIRED_YEAR_START = 2015
 REQUIRED_YEAR_END   = 2100
 
@@ -248,22 +248,6 @@ LAND_MASKS_ARCHIVE = DerivedArchive(
     nested=False
 )
 
-# Thirstwave feature files
-# THIRSTWAVE_ARCHIVE = DerivedArchive(
-#     name="thirstwave features",
-#     root=Path("/work10/archive/CMIP6/CMIP-SSPs/thirstwave_detection/thirstwave_features"),
-#     filename_glob="{model}_{exp}_thirstwave_features_*.nc",
-# )
- 
-# Cached 30-year (2071-2100) ET0 climatologies -- see calculate_ET0_climatology.py.
-# Flat directory (not nested by model/exp), and .npy rather than .nc, hence
-# nested=False and load_array() instead of open().
-# ET0_CLIMATOLOGY_ARCHIVE = DerivedArchive(
-#     name="ET0 climatology",
-#     root=Path("/work10/archive/CMIP6/CMIP-SSPs/code/daily-ET0/calculations/temporal_means"),
-#     filename_glob="{model}_{exp}_ET0_clim_2071-2100.npy",
-#     nested=False,
-# )
 
 
 def get_year_coverage_from_paths(paths: list[Path]) -> tuple[int, int] | None:
