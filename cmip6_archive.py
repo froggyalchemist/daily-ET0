@@ -198,28 +198,28 @@ class DerivedArchive:
 # Where daily ET0 data is stored
 ET0_ARCHIVE = DerivedArchive(
     name="ET0",
-    root=Path("/work10/archive/CMIP6/CMIP-SSPs/outputs"),
+    root=Path("/work10/archive/CMIP6/CMIP-SSPs/outputs/daily_ET0"),
     filename_glob="{model}_{exp}_daily_ET0_*.nc",
 )
 
 # Where daily ET0rad data is stored
 ET0_RAD_ARCHIVE = DerivedArchive(
     name="ET0rad",
-    root=Path("/work10/archive/CMIP6/CMIP-SSPs/outputs"),
+    root=Path("/work10/archive/CMIP6/CMIP-SSPs/outputs/daily_ET0"),
     filename_glob="{model}_{exp}_daily_ET0rad_*.nc",
 )
 
 # Where daily ET0adv data is stored
 ET0_ADV_ARCHIVE = DerivedArchive(
     name="ET0adv",
-    root=Path("/work10/archive/CMIP6/CMIP-SSPs/outputs"),
+    root=Path("/work10/archive/CMIP6/CMIP-SSPs/outputs/daily_ET0"),
     filename_glob="{model}_{exp}_daily_ET0adv_*.nc",
 )
 
 # 90th ET0 percentiles archive (only 8 files, one per model)
 PERCENTILES_ARCHIVE = DerivedArchive(
     name="90th_percentiles",
-    root=Path("/work10/archive/CMIP6/CMIP-SSPs/thirstwave_detection/90th_percentiles"),
+    root=Path("/work10/archive/CMIP6/CMIP-SSPs/outputs/thirstwave_detection/90th_percentiles"),
     filename_glob="{model}_historical_90th_percentiles.nc",
     nested=False
 )
@@ -227,7 +227,7 @@ PERCENTILES_ARCHIVE = DerivedArchive(
 # 90th ET0 percentiles archive (only 8 files, one per model)
 VALID_EVENT_DAYS_ARCHIVE = DerivedArchive(
     name="valid_event_days",
-    root=Path("/work10/archive/CMIP6/CMIP-SSPs/thirstwave_detection/valid_event_days"),
+    root=Path("/work10/archive/CMIP6/CMIP-SSPs/outputs/thirstwave_detection/valid_event_days"),
     filename_glob="{model}_{exp}_valid_event_days_*.nc",
     nested=False
 )
@@ -235,7 +235,7 @@ VALID_EVENT_DAYS_ARCHIVE = DerivedArchive(
 # Thirstwave feature files
 THIRSTWAVE_METRICS_GS_ARCHIVE = DerivedArchive(
     name="thirstwave_metrics_growing_season",
-    root=Path("/work10/archive/CMIP6/CMIP-SSPs/thirstwave_detection/thirstwave_metrics_growing_season"),
+    root=Path("/work10/archive/CMIP6/CMIP-SSPs/outputs/thirstwave_detection/thirstwave_metrics_growing_season"),
     filename_glob="{model}_{exp}_thirstwave_metrics_growing_season.nc",
     nested=False
 )
@@ -243,7 +243,7 @@ THIRSTWAVE_METRICS_GS_ARCHIVE = DerivedArchive(
 # Files with land area fraction data (sftlf), only one file per model as it is fixed across experiments
 LAND_MASKS_ARCHIVE = DerivedArchive(
     name="land_area_fraction",
-    root=Path("/work10/archive/CMIP6/CMIP-SSPs/thirstwave_detection/land_area_fraction"),
+    root=Path("/work10/archive/CMIP6/CMIP-SSPs/outputs/thirstwave_detection/land_area_fraction"),
     filename_glob="sftlf_fx_{model}_{exp}_*.nc",
     nested=False
 )
@@ -327,7 +327,7 @@ if __name__ == "__main__":
     console = Console()
 
     # 'archive' lets us open datasets without having to type the full path
-    archive = CMIP6LocalArchive(root="/work10/archive/CMIP6/CMIP-SSPs/")
+    archive = CMIP6LocalArchive(root="/work10/archive/CMIP6/CMIP-SSPs/inputs/")
     print("Created local archive: ", archive, "\n")
 
     # Small test to see if we can open a dataset

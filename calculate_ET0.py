@@ -179,7 +179,7 @@ def penman_monteith(
 
 
 # Default location for output netCDFs (and the run log)
-DEFAULT_OUTPUT_DIR = "/work10/archive/CMIP6/CMIP-SSPs/outputs"
+DEFAULT_OUTPUT_DIR = "/work10/archive/CMIP6/CMIP-SSPs/outputs/daily_ETO/"
 
 
 def process_combination(
@@ -247,13 +247,13 @@ if __name__ == "__main__":
     print(f"Started Dask cluster dashboard at {client.dashboard_link}")
 
     # Create local archive
-    archive = ca.CMIP6LocalArchive(root="/work10/archive/CMIP6/CMIP-SSPs/")
+    archive = ca.CMIP6LocalArchive(root="/work10/archive/CMIP6/CMIP-SSPs/inputs/")
 
     # List with all 40 combinations of the 8 models and 5 experiments
     #gcms = ca.MODELS
     #exps = ca.EXPERIMENTS
     #combinations = [(gcm, exp) for gcm in gcms for exp in exps]
-    combinations = [("MRI-ESM2-0", "ssp585")]
+    combinations = [("NorESM2-LM", "historical")]
 
     # Explicit 10-year chunking instead of "auto"
     chunks = {"time": 365*10, "lat": -1, "lon": -1}
